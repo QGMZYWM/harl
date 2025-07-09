@@ -8,6 +8,7 @@ from harl.envs.gym.gym_logger import GYMLogger
 from harl.envs.football.football_logger import FootballLogger
 from harl.envs.dexhands.dexhands_logger import DexHandsLogger
 from harl.envs.lag.lag_logger import LAGLogger
+from harl.envs.v2x.v2x_logger import V2XLogger
 
 FLAGS = flags.FLAGS
 FLAGS(["train_sc.py"])
@@ -21,6 +22,7 @@ LOGGER_REGISTRY = {
     "dexhands": DexHandsLogger,
     "smacv2": SMACv2Logger,
     "lag": LAGLogger,
+    "v2x": V2XLogger,
 }
 
 
@@ -91,9 +93,9 @@ def init_env(env_name, env_args, seed):
         env = LagEnv(env_args)
     # --- 【新增】为我们的v2x环境添加入口 ---
     elif env_name == "v2x":
-        from harl.envs.v2x.v2x_env import V2XEnv
-        print("[DEBUG] Matched 'v2x'. Creating V2XEnv...")
-        env = V2XEnv(env_args)
+        from harl.envs.v2x.v2x_env import V2XTaskOffloadingEnv
+        print("[DEBUG] Matched 'v2x'. Creating V2XTaskOffloadingEnv...")
+        env = V2XTaskOffloadingEnv(env_args)
     # ------------------------------------
     else:
         raise ValueError(f"Unsupported environment: {env_name}")

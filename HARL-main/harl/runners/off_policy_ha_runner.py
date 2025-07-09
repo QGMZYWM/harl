@@ -32,14 +32,18 @@ class OffPolicyHARunner(OffPolicyBaseRunner):
             next_actions = []
             next_logp_actions = []
             for agent_id in range(self.num_agents):
-                next_action, next_logp_action = self.actor[
-                    agent_id
-                ].get_actions_with_logprobs(
+                # Get actions with contrastive learning support
+                result = self.actor[agent_id].get_actions_with_logprobs(
                     sp_next_obs[agent_id],
                     sp_next_available_actions[agent_id]
                     if sp_next_available_actions is not None
                     else None,
+                    agent_id=agent_id
                 )
+                if len(result) == 3:  # Transformer-enhanced policy
+                    next_action, next_logp_action, _ = result
+                else:  # Standard policy
+                    next_action, next_logp_action = result
                 next_actions.append(next_action)
                 next_logp_actions.append(next_logp_action)
             self.critic.train(
@@ -78,16 +82,22 @@ class OffPolicyHARunner(OffPolicyBaseRunner):
             if self.args["algo"] == "hasac":
                 actions = []
                 logp_actions = []
+                contrastive_infos = []
                 with torch.no_grad():
                     for agent_id in range(self.num_agents):
-                        action, logp_action = self.actor[
-                            agent_id
-                        ].get_actions_with_logprobs(
+                        result = self.actor[agent_id].get_actions_with_logprobs(
                             sp_obs[agent_id],
                             sp_available_actions[agent_id]
                             if sp_available_actions is not None
                             else None,
+                            agent_id=agent_id
                         )
+                        if len(result) == 3:  # Transformer-enhanced policy
+                            action, logp_action, contrastive_info = result
+                            contrastive_infos.append(contrastive_info)
+                        else:  # Standard policy
+                            action, logp_action = result
+                            contrastive_infos.append(None)
                         actions.append(action)
                         logp_actions.append(logp_action)
                 # actions shape: (n_agents, batch_size, dim)
@@ -99,14 +109,18 @@ class OffPolicyHARunner(OffPolicyBaseRunner):
                 for agent_id in agent_order:
                     self.actor[agent_id].turn_on_grad()
                     # train this agent
-                    actions[agent_id], logp_actions[agent_id] = self.actor[
-                        agent_id
-                    ].get_actions_with_logprobs(
+                    result = self.actor[agent_id].get_actions_with_logprobs(
                         sp_obs[agent_id],
                         sp_available_actions[agent_id]
                         if sp_available_actions is not None
                         else None,
+                        agent_id=agent_id
                     )
+                    if len(result) == 3:  # Transformer-enhanced policy
+                        actions[agent_id], logp_actions[agent_id], contrastive_info = result
+                        contrastive_infos[agent_id] = contrastive_info
+                    else:  # Standard policy
+                        actions[agent_id], logp_actions[agent_id] = result
                     if self.state_type == "EP":
                         logp_action = logp_actions[agent_id]
                         actions_t = torch.cat(actions, dim=-1)
@@ -142,6 +156,17 @@ class OffPolicyHARunner(OffPolicyBaseRunner):
                         actor_loss = -torch.mean(
                             value_pred - self.alpha[agent_id] * logp_action
                         )
+                    
+                    # Add contrastive learning loss if using Transformer
+                    contrastive_loss = torch.tensor(0.0, device=self.device)
+                    if contrastive_infos[agent_id] is not None:
+                        contrastive_loss = self.actor[agent_id].compute_contrastive_loss(
+                            contrastive_infos[agent_id]
+                        )
+                        # Get lambda_cl from args, default to 0.1
+                        lambda_cl = self.algo_args.get("lambda_cl", 0.1)
+                        actor_loss = actor_loss + lambda_cl * contrastive_loss
+                    
                     self.actor[agent_id].actor_optimizer.zero_grad()
                     actor_loss.backward()
                     self.actor[agent_id].actor_optimizer.step()
@@ -159,14 +184,17 @@ class OffPolicyHARunner(OffPolicyBaseRunner):
                         self.alpha[agent_id] = torch.exp(
                             self.log_alpha[agent_id].detach()
                         )
-                    actions[agent_id], _ = self.actor[
-                        agent_id
-                    ].get_actions_with_logprobs(
+                    result = self.actor[agent_id].get_actions_with_logprobs(
                         sp_obs[agent_id],
                         sp_available_actions[agent_id]
                         if sp_available_actions is not None
                         else None,
+                        agent_id=agent_id
                     )
+                    if len(result) == 3:  # Transformer-enhanced policy
+                        actions[agent_id], _, _ = result
+                    else:  # Standard policy
+                        actions[agent_id], _ = result
                 # train critic's alpha
                 if self.algo_args["algo"]["auto_alpha"]:
                     self.critic.update_alpha(logp_actions, np.sum(self.target_entropy))
